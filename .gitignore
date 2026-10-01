@@ -1,0 +1,22 @@
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local virtual environments and configuration
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Editor and macOS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
