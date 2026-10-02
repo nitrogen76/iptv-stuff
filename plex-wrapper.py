@@ -92,7 +92,7 @@ def get_best_presentation(source_url, user_agent):
 
     if best_stream_inf is None:
         raise RuntimeError("No HLS video variants found")
-audio_group = attr(best_stream_inf, "AUDIO")
+    audio_group = attr(best_stream_inf, "AUDIO")
 
     if not audio_group:
     # Plex/Pluto streams may carry audio directly in the selected
