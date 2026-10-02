@@ -92,11 +92,26 @@ def get_best_presentation(source_url, user_agent):
 
     if best_stream_inf is None:
         raise RuntimeError("No HLS video variants found")
-
-    audio_group = attr(best_stream_inf, "AUDIO")
+audio_group = attr(best_stream_inf, "AUDIO")
 
     if not audio_group:
-        raise RuntimeError("Selected video variant has no AUDIO group")
+    # Plex/Pluto streams may carry audio directly in the selected
+    # video rendition rather than using a separate EXT-X-MEDIA
+    # AUDIO group.
+        log(
+            f"Selected variant has no AUDIO group; "
+            f"using muxed A/V variant: {best_video_uri}"
+        )
+
+        synthetic = "\n".join([
+            "#EXTM3U",
+            "#EXT-X-VERSION:5",
+            best_stream_inf,
+            best_video_uri,
+            "",
+        ])
+
+        return synthetic, best_bandwidth
 
     # Find audio renditions belonging to this video variant.
     audio_candidates = []
@@ -226,7 +241,6 @@ def main():
 
             "-i", "pipe:0",
 
-
             "-map", "0:v:0",
             "-map", "0:a:0",
 
@@ -270,7 +284,6 @@ def main():
 
     except KeyboardInterrupt:
         return 130
-
 
     except Exception as exc:
         log(f"{channel_id}: ERROR: {exc}")
