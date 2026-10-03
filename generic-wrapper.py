@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import os
+import ctypes
+import signal
 import subprocess
 import sys
 import urllib.parse
@@ -95,63 +97,71 @@ def get_best_presentation(source_url, user_agent):
 
     audio_group = attr(best_stream_inf, "AUDIO")
 
-    if not audio_group:
-        raise RuntimeError("Selected video variant has no AUDIO group")
+    # Some providers use separate audio renditions; others carry
+    # audio directly in the selected video variant.
+    audio_line = None
 
-    # Find audio renditions belonging to this video variant.
-    audio_candidates = []
+    if audio_group:
+        audio_candidates = []
 
-    for line in lines:
-        if not line.startswith("#EXT-X-MEDIA:"):
-            continue
+        for line in lines:
+            if not line.startswith("#EXT-X-MEDIA:"):
+                continue
 
-        if attr(line, "TYPE") != "AUDIO":
-            continue
+            if attr(line, "TYPE") != "AUDIO":
+                continue
 
-        if attr(line, "GROUP-ID") != audio_group:
-            continue
+            if attr(line, "GROUP-ID") != audio_group:
+                continue
 
-        audio_candidates.append(line)
+            audio_candidates.append(line)
 
-    if not audio_candidates:
-        raise RuntimeError(
-            f"No audio renditions found for AUDIO group {audio_group!r}"
+        if not audio_candidates:
+            raise RuntimeError(
+                f"No audio renditions found for AUDIO group {audio_group!r}"
+            )
+
+        # Prefer DEFAULT=YES to avoid audio-description or alternate
+        # language renditions when the provider supplies them.
+        audio_line = next(
+            (
+                line for line in audio_candidates
+                if attr(line, "DEFAULT") == "YES"
+            ),
+            audio_candidates[0],
         )
 
-    # Prefer DEFAULT=YES. This avoids accidentally selecting
-    # Pluto's audio-description rendition.
-    audio_line = next(
-        (
-            line for line in audio_candidates
-            if attr(line, "DEFAULT") == "YES"
-        ),
-        audio_candidates[0],
-    )
+        audio_line = absolute_media_uri(audio_line, master_url)
 
-    audio_line = absolute_media_uri(audio_line, master_url)
-
-    #
-    # Build one-video / one-audio master.
-    #
     # Remove SUBTITLES because we intentionally aren't carrying them.
-    #
     stream_inf = re.sub(
         r',SUBTITLES="[^"]*"',
         '',
         best_stream_inf
     )
 
-    synthetic = "\n".join([
+    synthetic_lines = [
         "#EXTM3U",
         "#EXT-X-VERSION:5",
-        audio_line,
+    ]
+
+    if audio_line is not None:
+        synthetic_lines.append(audio_line)
+
+    synthetic_lines.extend([
         stream_inf,
         best_video_uri,
         "",
     ])
 
+    synthetic = "\n".join(synthetic_lines)
+
     return synthetic, best_bandwidth
 
+def die_with_parent():
+    PR_SET_PDEATHSIG = 1
+    libc = ctypes.CDLL(None)
+    libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
 
 def main():
     if len(sys.argv) < 2:
@@ -174,6 +184,13 @@ def main():
         if len(sys.argv) >= 4
         else "unknown"
     )
+    def termination_handler(signum, frame):
+        log(f"{channel_id}: RECEIVED SIGNAL {signum}")
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, termination_handler)
+    signal.signal(signal.SIGHUP, termination_handler)
+
 
     vlc = None
     ffmpeg = None
@@ -214,37 +231,32 @@ def main():
             stdout=subprocess.PIPE,
             stderr=sys.stderr,
             bufsize=0,
+            preexec_fn=die_with_parent,
         )
 
         ffmpeg_cmd = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "info",
-
+            "-fflags", "+genpts+discardcorrupt",
+            "-err_detect", "ignore_err",
             "-analyzeduration", "5000000",
             "-probesize", "5000000",
-
             "-i", "pipe:0",
-
-
             "-map", "0:v:0",
             "-map", "0:a:0",
-
-            "-c", "copy",
-
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-af", "aresample=async=1:first_pts=0",
+            "-avoid_negative_ts", "make_zero",
             "-mpegts_transport_stream_id", "1",
             "-mpegts_service_id", "1",
-
-            # Keep elementary-stream PIDs stable.
             "-streamid", "0:256",
             "-streamid", "1:257",
-
-            # Re-emit PAT/PMT when the muxer needs to resend headers.
             "-mpegts_flags", "+resend_headers",
-
             "-metadata", "service_provider=Pluto",
             "-metadata", "service_name=Pluto TV",
-
             "-f", "mpegts",
             "pipe:1",
         ]
@@ -261,6 +273,7 @@ def main():
 
             stderr=sys.stderr,
             bufsize=0,
+            preexec_fn=die_with_parent,
         )
 
         vlc.stdout.close()
@@ -270,7 +283,6 @@ def main():
 
     except KeyboardInterrupt:
         return 130
-
 
     except Exception as exc:
         log(f"{channel_id}: ERROR: {exc}")
