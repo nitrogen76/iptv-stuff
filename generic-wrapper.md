@@ -361,6 +361,37 @@ Its priorities are:
 5. Minimize CPU usage.
 6. Clean up every process when playback ends.
 
+### Timeshifting and Timeline Reporting
+
+Timeshifting generally works with the normalized MPEG-TS output, including pausing, resuming, and seeking within the timeshift buffer.
+
+However, some source streams contain significant timestamp discontinuities, particularly around dynamically inserted advertising and transitions between programming and advertisements.
+
+The wrapper is designed primarily to make these streams **continue playing reliably across those discontinuities**. It does not attempt to construct an entirely new continuous video timeline. Because the video stream is copied rather than decoded and re-encoded, some characteristics of the source PTS/DTS timeline can remain in the normalized output.
+
+As a result, applications such as TVHeadend may occasionally report unusual or incorrect timeshift timing information. For example:
+
+- the reported buffer duration may not correspond exactly to the amount of real time buffered
+- the displayed playback position may jump unexpectedly
+- the reported distance from the live position may be inaccurate
+- timeline behavior may become particularly strange after an HLS discontinuity or advertisement transition
+
+This does **not necessarily indicate corruption of the timeshift buffer**. In testing, seeking, pausing, resuming, and playback can continue to work even when the displayed timeline is incorrect.
+
+This is a deliberate tradeoff in the current design. The wrapper prioritizes:
+
+```text
+reliable playback
+        >
+preserving the original video without re-encoding
+        >
+perfect reconstruction of the source timeline
+```
+
+Completely rebuilding the video timeline would likely require decoding and re-encoding the video, or substantially more aggressive timestamp manipulation. Either approach would increase resource usage and could introduce additional compatibility problems.
+
+For now, inaccurate timeshift timing should therefore be considered a known limitation when processing source streams with significant timestamp discontinuities.
+
 In short:
 
 > Take weird Internet television and make it boring.
